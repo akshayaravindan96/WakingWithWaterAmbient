@@ -1,3 +1,6 @@
+#include <Chrono.h>
+#include <LightChrono.h>
+
 //----------------------------------------------------
 //      ME216M Final Project
 //      Waking with Water
@@ -6,35 +9,25 @@
 //      Akshay Aravindan
 //----------------------------------------------------
 
-#include <SoftwareSerial.h>
 #include <EventManager.h>           // event manager system
-#include <Chrono.h>                       // timers
+                      // timers
 #include <Wire.h>                             // allows communication with i2c/twi devices
 #include "config.h"                             // connectivity settings
 #include <ESP8266WiFiMulti.h>       // wifi router
 #include <ESP8266HTTPClient.h>      // wifi router stuff
-#include <ArduinoJson.h>                 // json stuff
+          
 #include "Adafruit_VEML7700.h"        // light sensor
 #include "Adafruit_NeoPixel.h"              // led strips
-#include <SPI.h>                                  // used for the screen
-#include <Adafruit_GFX.h>    // Core graphics library
-#include <Adafruit_ILI9341.h> // Hardware-specific library
-#include <Adafruit_STMPE610.h> // resistive touchscreen controller
+
+#include <ArduinoJson.h>
 
 //----------------------------------------------------
 //     Pinouts
 //----------------------------------------------------
 
-// TFT Touchscreen
-const int STMPE_CS = 16;
-const int TFT_CS = -1; // free up this pin; originally pin 0
-const int TFT_DC = 15;
-const int SD_CS = -1; // free up this pin; originally pin 2
 
-const int PIN_AMBIENT_LED = 0; // update these later
-const int PIN_DOCK_LED = 2;
-const int PIN_MP3_TX = 1;
-const int PIN_MP3_RX = 3; 
+const int PIN_AMBIENT_LED = 12; // update these later
+
 
 //----------------------------------------------------
 //      Object Creation
@@ -46,19 +39,6 @@ Chrono timerAlarmTimeout;       // timer for checking if the alarm should shut o
 ESP8266WiFiMulti myWiFi;      // create wifi object
 Adafruit_VEML7700 veml = Adafruit_VEML7700(); // light sensor
 
-// creating the screen objects
-Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC); // tft screen
-Adafruit_STMPE610 ts = Adafruit_STMPE610(STMPE_CS); // touchscreen controller
-// This is calibration data for the raw touch data to the screen coordinates
-#define TS_MINX 3800
-#define TS_MAXX 100
-#define TS_MINY 100
-#define TS_MAXY 3750
-// Size of the color selection boxes and the paintbrush size
-#define BOXSIZE 40
-#define PENRADIUS 3
-int oldcolor, currentcolor;
-// -----------potentially delete: boxsize, penradius, oldcolor, currentcolor
 
 //----------------------------------------------------
 //      State Tracking Variables
@@ -69,27 +49,22 @@ int oldcolor, currentcolor;
 //----------------------------------------------------
 EventManager eventManager;
 #define EVENT_TIMER_REFRESH EventManager::kEventUser0
-#define EVENT_12AM EventManager::kEventUser1
-#define EVENT_TAP_SCREEN EventManager::kEventUser2
-#define EVENT_ALARM_TIMEOUT EventManager::kEventUser3
-#define EVENT_ALARM_TIME EventManager::kEventUser4
 #define EVENT_LIGHT_LEVEL EventManager::kEventUser5
 
 //----------------------------------------------------
 //     States for SM
 //----------------------------------------------------
-enum SystemState_t {STATE_INIT, STATE_TIME, STATE_ALARM};
-SystemState_t currentState = STATE_INIT;
+enum SystemState_t {STATE_MAIN};
+SystemState_t currentState = STATE_MAIN;
 
 //----------------------------------------------------
 //     Global Variables
 //----------------------------------------------------
 const int maxLux = 475;               // daylight lux
 const int minLux = 10;                  // nighttime lux
-const int NUM_PIXELS = 22;          // esimtated 22 pixels 
+const int NUM_PIXELS = 30;          // esimtated 22 pixels 
 
-const int SCREEN_HEIGHT = 320;
-const int SCREEN_WIDTH = 240;
+
 
 Adafruit_NeoPixel strip(NUM_PIXELS, PIN_AMBIENT_LED, NEO_GRB + NEO_KHZ800);
 
@@ -97,7 +72,7 @@ void setup() {
   Serial.begin(115200);
   Serial.println("SETUP");
   InitVEML();                                   // init light sensor
-  InitDisplay();                                // init TFT display
+                             
 //  InitWiFi();                                     // wifi initialization 
 
   // consider making the strip its own init function
@@ -105,16 +80,13 @@ void setup() {
 
   // initialize listeners
   eventManager.addListener(EVENT_TIMER_REFRESH, alarm_SM);
-  eventManager.addListener(EVENT_12AM, alarm_SM);
-  eventManager.addListener(EVENT_TAP_SCREEN, alarm_SM);
-  eventManager.addListener(EVENT_ALARM_TIMEOUT, alarm_SM);
-  eventManager.addListener(EVENT_ALARM_TIME, alarm_SM);
   eventManager.addListener(EVENT_LIGHT_LEVEL, alarm_SM);
-  alarm_SM(STATE_TIME, 0); //initialize the state machine
+  
+  Ambient_SM(STATE_MAIN, 0); //initialize the state machine
   
   // restart the timers
   timerRefresh.restart();
-  timerAlarmTimeout.restart();
+  
 }
 
 void InitNeoStrip() {
@@ -132,19 +104,6 @@ void InitVEML() {
   veml.setIntegrationTime(VEML7700_IT_800MS);
 }
 
-void InitDisplay() {
-  // initialization stuff
-  if(!ts.begin()) {
-    Serial.println("Touchscreen not found");
-    while(1);
-  }
-  Serial.println("Touchscreen found");
-
-  tft.begin();
-  tft.setRotation(2); // sets the rotation
-  tft.fillScreen(ILI9341_BLACK);
-}
-
 void InitWiFi() {
   WiFi.mode(WIFI_STA);
   myWiFi.addAP(wifi_ssid, wifi_password);
@@ -159,13 +118,12 @@ void InitWiFi() {
   Serial.println("");
   Serial.println("[WIFI] Set up complete!");
 
-  // prototyping
-//  testScreen();
+
 }
 
 void loop() {
   // handle events in the queue
-//  eventManager.processEvent();
+ eventManager.processEvent();
 
   // check for new events
 //  CheckRefreshTimer();
@@ -176,30 +134,10 @@ void loop() {
   
   // prototyping functions
   CheckLux();
-  testScreenLux();
+
   delay(3000);
 }
 
-void testScreen() {
-  tft.fillScreen(ILI9341_BLUE);
-  // time in the middle
-  int x_1 = 20;
-  int y_time = SCREEN_HEIGHT/2 - 20;
-  tft.setCursor(x_1, y_time); // cursor location for time
-  tft.setTextColor(ILI9341_WHITE); 
-  tft.setTextSize(5);
-  tft.println("6:00 AM");
-}
-
-void testScreenLux() {
-  tft.fillScreen(ILI9341_BLACK);
-  int x_1 = 20;
-  int y_time = SCREEN_HEIGHT/2 - 20;
-  tft.setCursor(x_1, y_time); // cursor location for time
-  tft.setTextColor(ILI9341_WHITE); 
-  tft.setTextSize(3);
-  tft.print("LUX: "); tft.println(veml.readLux());
-}
 
 void CheckLux() {
   int currentLux = veml.readLux(); // 1) create  int for current lux
@@ -239,25 +177,8 @@ void CheckRefreshTimer() {
   }
 }
 
-void Check12AM() {
-  // if the current time is midnight
-}
 
-void CheckAlarmTime() {
-  // if current time is the alarm time queue up the event
-}
-
-void CheckScreenTap() {
-  // check if the screen has been tapped
-}
-
-void CheckAlarmTimerExpired() {
-  if (timerAlarmTimeout.hasPassed(300000)) {
-    eventManager.queueEvent(EVENT_ALARM_TIMEOUT, 0);
-  }
-}
-
-void alarm_SM(int event, int param) {
+void Ambient_SM(int event, int param) {
   SystemState_t nextState = currentState;
 
   // initlialize the sunrise and sunset times
@@ -269,43 +190,17 @@ void alarm_SM(int event, int param) {
   // and the ambient light levels before heading into the time mode
 
   switch(currentState) {
-    case STATE_INIT: 
-      // run the setup then transition to time
-      // 1) pull sunrise and sunset from darksky
-      // 2) update the lights to the right level
-//      UpdateAmbient(currentTime, sunriseTime, sunsetTime);
-      nextState = STATE_TIME;
-      break;
       
-    case STATE_TIME:
+    case STATE_MAIN:
       if ( event == EVENT_LIGHT_LEVEL ) {
         Serial.println("Light level adjustment");
         RespLuxChange();
       }
-      
       if (event == EVENT_TIMER_REFRESH) {
-        UpdateDisplayTime();
+        //UpdateDisplayTime();
 //        UpdateHueColor();
       }
 
-      if(event == EVENT_12AM) {
-        // update the sunrise and sunset times
-      }
-
-      if(event== EVENT_ALARM_TIME) {
-        // transition to alarm state
-        // 1) play sound of water
-        // 2) illuminate dock light
-        // 3) restart alarm timout
-        timerAlarmTimeout.restart();
-      }
-      break;
-
-    case STATE_ALARM:
-      if (event == EVENT_LIGHT_LEVEL) {
-        Serial.println("Light level adjustment");
-        RespLuxChange();
-      }
       break;
 
     default:
@@ -313,9 +208,6 @@ void alarm_SM(int event, int param) {
   }
 }
 
-void UpdateDisplayTime() {
-  // dispaly the current time
-}
 
 
 //void UpdateAmbient(int currentTime, int timeSunrise, int timeSunset) {
